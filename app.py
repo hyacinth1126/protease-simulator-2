@@ -12,8 +12,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # UI 모듈 import
-from app_ui.prep_mode import prep_raw_data_mode
-from app_ui.interp_mode import data_interpolation_mode
+from app_ui.data_load_mode import data_load_mode
 from app_ui.general_analysis_mode import general_analysis_mode
 from app_ui.footer import render_footer
 
@@ -30,31 +29,24 @@ def main():
         layout="wide"
     )
     
-    st.title("🔬  Hydrogel FRET Simulation")
+    st.title("🔬  FRET Protease Simulation")
     st.markdown("---")
     
     # 모드 선택
     analysis_mode = st.sidebar.radio(
         "분석 모드 선택",
-        ["Prep Raw Data 모드", "Data Interpolation 모드", "일반 분석 모드"],
-        help="Prep Raw Data 모드: Raw data에서 MM Fitting | Data Interpolation 모드: Fitting 결과에서 Prism 스타일 보간 | 일반 분석 모드: 표준 FRET 분석"
+        ["Data Load 모드", "Analysis 모드"],
+        help="Data Load 모드: CSV 파일 업로드 또는 이미지에서 데이터 추출 | Analysis 모드: 표준 FRET 분석"
     )
-    
-    st.markdown("---")
     # 항상 하단에 푸터 렌더링
     render_footer()
     
-    # Prep Raw Data 모드
-    if analysis_mode == "Prep Raw Data 모드":
-        prep_raw_data_mode(st)
+    # Data Load 모드
+    if analysis_mode == "Data Load 모드":
+        data_load_mode(st)
         return
     
-    # Data Interpolation 모드
-    if analysis_mode == "Data Interpolation 모드":
-        data_interpolation_mode(st)
-        return
-    
-    # 일반 분석 모드
+    # Analysis 모드
     general_analysis_mode(st)
 
 

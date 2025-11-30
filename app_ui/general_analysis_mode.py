@@ -39,12 +39,12 @@ def general_analysis_mode(st):
         max_value=500.0,
         value=56.6,
         step=0.1,
-        help="Kgp: 56.6 kDa"
+        help="농도 변환을 위해 필요한 효소 분자량을 입력해주세요."
     )
     
     enzyme_name = st.sidebar.text_input(
         "효소 이름 (선택사항)",
-        value="",
+        value="Kgp",
         placeholder="enzyme",
         help="그래프 범례에 표시될 효소 이름 (비워두면 'enzyme' 표시)"
     )
@@ -53,7 +53,7 @@ def general_analysis_mode(st):
     
     substrate_name = st.sidebar.text_input(
         "기질 이름 (선택사항)",
-        value="",
+        value="Dabcyl-HEK-K(FITC)-C",
         placeholder="substrate",
         help="그래프 범례에 표시될 기질 이름 (비워두면 'substrate' 표시)"
     )
@@ -63,93 +63,132 @@ def general_analysis_mode(st):
     st.sidebar.markdown("---")
     st.sidebar.subheader("📁 데이터 소스")
     
-    # 데이터 소스 타입 선택
-    data_source_type = st.sidebar.radio(
-        "데이터 소스 선택",
-        ["Raw Data Points", "Fitted Curves (from Prep mode)"],
-        help="Raw Data Points: 원본 측정 데이터 | Fitted Curves: Prep 모드에서 생성된 fitting/interpolation 곡선"
-    )
-
     uploaded_file = st.sidebar.file_uploader(
-        "CSV 파일 업로드",
-        type=['csv'],
-        help="Raw Data: time_s, enzyme_ugml, FL_intensity, SD | Fitted Curves: Concentration, Time_min, RFU_*"
+        "CSV/XLSX 파일 업로드 (Fitted Curves)",
+        type=['csv', 'xlsx'],
+        help="Data Load 모드에서 생성된 결과 파일 (CSV 또는 XLSX): XLSX의 경우 'Michaelis-Menten Curves' 시트 사용"
     )
-    # Provide sample data download based on data source type
-    if data_source_type == "Raw Data Points":
-        try:
-            with open("fitc_peptide_timeseries.csv", "rb") as f:
-                sample_bytes = f.read()
-            st.sidebar.download_button(
-                label="샘플 원본 데이터 다운로드 (CSV)",
-                data=sample_bytes,
-                file_name="raw_data.csv",
-                mime="text/csv",
-                help="배포된 기본 CSV를 다운로드합니다."
-            )
-        except Exception:
-            pass
-    else:
-        # Fitted Curves 샘플 다운로드
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            try:
-                with open("prep_raw_data_mode/results/MM_calculated_curves.csv", "rb") as f:
-                    sample_bytes = f.read()
-                st.download_button(
-                    label="📥 Calculated",
-                    data=sample_bytes,
-                    file_name="calculated_curves_sample.csv",
-                    mime="text/csv"
-                )
-            except Exception:
-                pass
-        with col2:
-            try:
-                with open("data_interpolation_mode/results/MM_interpolated_curves.csv", "rb") as f:
-                    sample_bytes = f.read()
-                st.download_button(
-                    label="📥 Interpolated",
-                    data=sample_bytes,
-                    file_name="interpolated_curves_sample.csv",
-                    mime="text/csv"
-                )
-            except Exception:
-                pass
     
-    # Step 1: Load data based on source type
-    if data_source_type == "Raw Data Points":
-        # Raw Data Points 모드
-        if uploaded_file is not None:
-            df_raw = pd.read_csv(uploaded_file)
-        else:
-            # Use default sample data
-            try:
-                df_raw = pd.read_csv("fitc_peptide_timeseries.csv")
-                st.sidebar.info("fitc_peptide_timeseries.csv 사용 중")
-            except FileNotFoundError:
-                st.error("데이터 파일을 찾을 수 없습니다. CSV 파일을 업로드해주세요.")
-                st.stop()
-    else:
-        # Fitted Curves 모드
-        if uploaded_file is not None:
-            df_fitted = pd.read_csv(uploaded_file)
-        else:
-            # Try to load from fitting_results first, then interpolation_results
-            try:
-                df_fitted = pd.read_csv("prep_raw_data_mode/results/MM_calculated_curves.csv")
-                st.sidebar.info("prep_raw_data_mode/results/MM_calculated_curves.csv 사용 중")
-            except FileNotFoundError:
-                try:
-                    df_fitted = pd.read_csv("data_interpolation_mode/results/MM_interpolated_curves.csv")
-                    st.sidebar.info("data_interpolation_mode/results/MM_interpolated_curves.csv 사용 중")
-                except FileNotFoundError:
-                    st.error("Fitted curves 파일을 찾을 수 없습니다. 먼저 'Prep Raw Data 모드' 또는 'Data Interpolation 모드'를 실행하거나 파일을 업로드해주세요.")
-                    st.stop()
+    # Fitted Curves 샘플 다운로드 (Data Load 모드 결과)
+    try:
+        with open("data_interpolation_mode/results/MM_interpolated_curves.csv", "rb") as f:
+            sample_bytes = f.read()
+        st.sidebar.download_button(
+            label="📥 Data Load 결과 CSV 다운로드",
+            data=sample_bytes,
+            file_name="MM_interpolated_curves.csv",
+            mime="text/csv",
+            help="Data Load 모드에서 생성된 결과 CSV 파일"
+        )
+    except Exception:
+        pass
+    
+    # Step 1: Load Fitted Curves data (원본 데이터 플롯용)
+    df_fitted = None
+    rfu_col = None
+    
+    if uploaded_file is not None:
+        # 업로드된 파일 처리
+        import tempfile
+        file_extension = uploaded_file.name.split('.')[-1].lower()
         
-        # Convert fitted curves to raw data format
-        # Fitted curves format: Concentration, Concentration [ug/mL], Time_min, RFU_Calculated/RFU_Interpolated, Is_Extrapolated
-        # Target format: time_min, enzyme_ugml, FL_intensity, SD
+        with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_extension}', mode='wb') as tmp_file:
+            tmp_file.write(uploaded_file.getbuffer())
+            tmp_path = tmp_file.name
+        
+        try:
+            if file_extension == 'xlsx':
+                # XLSX 파일: "Michaelis-Menten Curves" 시트 읽기
+                df_fitted = pd.read_excel(tmp_path, sheet_name='Michaelis-Menten Curves', engine='openpyxl')
+                rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else 'RFU_Calculated'
+                st.sidebar.success("✅ 업로드된 XLSX 파일 사용 중 (Michaelis-Menten Curves 시트)")
+            else:
+                # CSV 파일
+                df_fitted = pd.read_csv(tmp_path)
+                rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else 'RFU_Calculated'
+                st.sidebar.success("✅ 업로드된 CSV 파일 사용 중")
+        finally:
+            os.unlink(tmp_path)
+    else:
+        # Data Load 모드에서 생성된 결과 파일 자동 로드 (1순위: XLSX, 2순위: CSV)
+        import os
+        from pathlib import Path
+        
+        df_fitted = None
+        
+        # 1순위: XLSX 파일 (Michaelis-Menten_calibration_results.xlsx)
+        xlsx_paths = [
+            'Michaelis-Menten_calibration_results.xlsx',
+            str(Path(__file__).parent.parent / 'Michaelis-Menten_calibration_results.xlsx'),
+        ]
+        
+        for path in xlsx_paths:
+            try:
+                if os.path.exists(path):
+                    df_fitted = pd.read_excel(path, sheet_name='Michaelis-Menten Curves', engine='openpyxl')
+                    rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else 'RFU_Calculated'
+                    st.sidebar.info(f"✅ Data Load 모드 결과 XLSX 자동 로드됨")
+                    break
+            except Exception:
+                continue
+        
+        # 2순위: CSV 파일
+        if df_fitted is None:
+            csv_paths = [
+                'data_interpolation_mode/results/MM_interpolated_curves.csv',
+                str(Path(__file__).parent.parent / 'data_interpolation_mode' / 'results' / 'MM_interpolated_curves.csv'),
+            ]
+            
+            for path in csv_paths:
+                try:
+                    if os.path.exists(path):
+                        df_fitted = pd.read_csv(path)
+                        rfu_col = 'RFU_Interpolated' if 'RFU_Interpolated' in df_fitted.columns else 'RFU_Calculated'
+                        st.sidebar.info(f"✅ Data Load 모드 결과 CSV 자동 로드됨")
+                        break
+                except Exception:
+                    continue
+        
+        if df_fitted is None:
+            st.error("Data Load 모드 결과 파일을 찾을 수 없습니다. 먼저 'Data Load 모드'를 실행하여 결과를 다운로드하거나 CSV/XLSX 파일을 업로드해주세요.")
+            st.stop()
+        
+        # rfu_col이 아직 설정되지 않았으면 설정
+        if rfu_col is None:
+            if 'RFU_Interpolated' in df_fitted.columns:
+                rfu_col = 'RFU_Interpolated'
+            elif 'RFU_Calculated' in df_fitted.columns:
+                rfu_col = 'RFU_Calculated'
+            else:
+                rfu_col = 'RFU_Interpolated'  # 기본값
+    
+    # 원본 측정 데이터 읽기 (raw.csv에서 직접)
+    # 보간된 곡선이 아닌 실제 측정 포인트만 사용
+    try:
+        from mode_prep_raw_data.prep import read_raw_data
+        raw_data_dict = read_raw_data('mode_prep_raw_data/raw.csv')
+        
+        # 원본 측정 포인트로 변환
+        df_raw_converted = []
+        for conc_name, data in raw_data_dict.items():
+            times = data['time']
+            values = data['value']
+            sds = data.get('SD', [0] * len(times))
+            
+            for time, value, sd in zip(times, values, sds):
+                df_raw_converted.append({
+                    'time_min': time,
+                    'enzyme_ugml': data['concentration'],
+                    'FL_intensity': value,
+                    'SD': sd
+                })
+        
+        df_raw = pd.DataFrame(df_raw_converted)
+        st.sidebar.info("✅ 원본 측정 데이터 사용 (raw.csv)")
+        
+    except Exception as e:
+        # Fallback: 보간된 곡선 데이터 사용 (원본 데이터를 찾을 수 없는 경우)
+        st.sidebar.warning(f"⚠️ 원본 데이터를 찾을 수 없어 보간된 곡선 데이터를 사용합니다: {e}")
         
         # Detect RFU column name
         rfu_col = None
@@ -161,14 +200,28 @@ def general_analysis_mode(st):
             st.error("RFU 데이터 컬럼을 찾을 수 없습니다. (RFU_Calculated 또는 RFU_Interpolated)")
             st.stop()
         
+        # 원본 측정 시간 포인트만 필터링 (보간된 곡선에서 원본 시간만 추출)
+        # raw.csv의 시간 포인트와 일치하는 것만 사용
+        try:
+            raw_df = pd.read_csv('mode_prep_raw_data/raw.csv', sep='\t', skiprows=[0, 1])
+            original_times = set(raw_df['time_min'].unique())
+            
+            # 원본 시간 포인트만 필터링
+            df_fitted_filtered = df_fitted[df_fitted['Time_min'].isin(original_times)].copy()
+            
+            if len(df_fitted_filtered) == 0:
+                # 필터링 실패 시 전체 사용
+                df_fitted_filtered = df_fitted.copy()
+        except:
+            # raw.csv를 읽을 수 없으면 전체 사용
+            df_fitted_filtered = df_fitted.copy()
+        
         # Pivot data to get one row per time point with columns for each concentration
         df_raw_converted = []
-        
-        # Get unique time points
-        unique_times = sorted(df_fitted['Time_min'].unique())
+        unique_times = sorted(df_fitted_filtered['Time_min'].unique())
         
         for time in unique_times:
-            time_data = df_fitted[df_fitted['Time_min'] == time]
+            time_data = df_fitted_filtered[df_fitted_filtered['Time_min'] == time]
             
             # Create row for each concentration
             for _, row in time_data.iterrows():
@@ -183,12 +236,34 @@ def general_analysis_mode(st):
                 })
         
         df_raw = pd.DataFrame(df_raw_converted)
-        
-        st.sidebar.success(f"✅ {len(df_fitted['Concentration'].unique())}개 농도 조건, {len(unique_times)}개 시간 포인트 로드됨")
-        st.sidebar.info(f"📊 RFU 컬럼: {rfu_col}")
+    
+    # 원본 시간 범위 저장 (raw.csv에서 직접 읽기)
+    try:
+        # raw.csv 파일에서 최대 시간 값 읽기
+        raw_df = pd.read_csv('mode_prep_raw_data/raw.csv', sep='\t', skiprows=[0, 1])
+        original_time_max = raw_df['time_min'].max()
+    except Exception:
+        # 실패 시 df_raw에서 추정
+        original_time_max = df_raw['time_min'].max()
+    
+    # 원본 측정 포인트 수 계산
+    unique_times = sorted(df_raw['time_min'].unique())
+    unique_concs = sorted(df_raw['enzyme_ugml'].unique())
+    st.sidebar.success(f"✅ {len(unique_concs)}개 농도 조건, {len(unique_times)}개 원본 측정 포인트 로드됨")
     
     # Store data source type for later use
-    st.session_state['data_source_type'] = data_source_type
+    st.session_state['data_source_type'] = 'Fitted Curves (from Data Load mode)'
+    st.session_state['original_time_max'] = original_time_max
+    # 원본 fitted 데이터 저장 (Data Load 모드와 동일한 그래프를 그리기 위해)
+    # df_fitted는 보간된 곡선 데이터이므로 원본 데이터 플롯에 사용
+    if df_fitted is not None:
+        st.session_state['df_fitted_original'] = df_fitted
+        # rfu_col도 저장 (원본 데이터 플롯용)
+        if rfu_col is not None:
+            st.session_state['rfu_col'] = rfu_col
+        else:
+            # rfu_col이 없으면 기본값 사용
+            st.session_state['rfu_col'] = 'RFU_Interpolated'
     
     # Step 2: Standardize units
     standardizer = UnitStandardizer(enzyme_mw=enzyme_mw)
@@ -223,12 +298,14 @@ def general_analysis_mode(st):
     st.subheader("📊 데이터 미리보기")
     
     # Detect original column names for display
-    time_unit = st.session_state.get('time_unit', 's')
+    time_unit = st.session_state.get('time_unit', 'min')
+    # 원본 시간 범위 사용 (보간된 데이터가 아닌)
+    original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
     if time_unit == 'min':
-        time_display = f"0 - {df['time_s'].max():.0f} 분"
+        time_display = f"0 - {original_time_max:.0f} 분"
         time_label = "시간 (분)"
     else:
-        time_display = f"0 - {df['time_s'].max():.0f} 초" if df['time_s'].max() < 100 else f"0 - {df['time_s'].max()/60:.1f} 분"
+        time_display = f"0 - {original_time_max:.0f} 초" if original_time_max < 100 else f"0 - {original_time_max/60:.1f} 분"
         time_label = "시간 (초)"
     # Determine concentration unit from normalized data
     conc_col = df['conc_col_name'].iloc[0] if 'conc_col_name' in df.columns else 'enzyme_ugml'
@@ -242,12 +319,10 @@ def general_analysis_mode(st):
     st.session_state['time_label'] = time_label
     st.session_state['conc_unit'] = conc_unit
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        st.metric("데이터 포인트", len(df))
-    with col2:
         st.metric(f"농도 조건 ({conc_unit})", df[conc_col].nunique())
-    with col3:
+    with col2:
         st.metric("시간 범위", time_display)
     
     # Tabs for different views
@@ -260,13 +335,77 @@ def general_analysis_mode(st):
     ])
     
     with tab1:
-        st.plotly_chart(
-            Visualizer.plot_raw_data(df, conc_unit, time_label, 
-                                    use_lines=(st.session_state.get('data_source_type') == 'Fitted Curves (from Prep mode)'),
-                                    enzyme_name=enzyme_name, 
-                                    substrate_name=substrate_name), 
-            use_container_width=True
-        )
+        # Data Load 모드와 동일한 그래프를 그리기 위해 원본 fitted 데이터 사용
+        if 'df_fitted_original' in st.session_state:
+            df_fitted_orig = st.session_state['df_fitted_original']
+            rfu_col = st.session_state.get('rfu_col', 'RFU_Interpolated')
+            
+            # Data Load 모드와 동일한 형식으로 그래프 생성
+            import plotly.graph_objects as go
+            fig_raw = go.Figure()
+            colors = ['blue', 'red', 'orange', 'green', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan']
+            
+            # 농도 순서대로 정렬
+            if 'Concentration [ug/mL]' in df_fitted_orig.columns:
+                conc_order = df_fitted_orig.sort_values('Concentration [ug/mL]')['Concentration'].unique()
+            else:
+                conc_order = df_fitted_orig['Concentration'].unique()
+            
+            for idx, conc_name in enumerate(conc_order):
+                color = colors[idx % len(colors)]
+                subset = df_fitted_orig[df_fitted_orig['Concentration'] == conc_name]
+                
+                if len(subset) > 0:
+                    fig_raw.add_trace(go.Scatter(
+                        x=subset['Time_min'],
+                        y=subset[rfu_col],
+                        mode='lines',
+                        name=conc_name,
+                        line=dict(color=color, width=2.5),
+                        legendgroup=conc_name,
+                        showlegend=True
+                    ))
+            
+            fig_raw.update_layout(
+                xaxis_title='Time (min)',
+                yaxis_title='RFU',
+                height=700,
+                template='plotly_white',
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                hovermode='x unified',
+                legend=dict(
+                    orientation="v",
+                    yanchor="bottom",
+                    y=0.05,
+                    xanchor="right",
+                    x=0.99,
+                    bgcolor="rgba(0,0,0,0)",
+                    bordercolor="rgba(0,0,0,0)",
+                    borderwidth=0,
+                    font=dict(color="white")
+                )
+            )
+            
+            # 원본 시간 범위로 xaxis 설정
+            original_time_max = st.session_state.get('original_time_max', df_fitted_orig['Time_min'].max())
+            fig_raw.update_xaxes(range=[0, original_time_max])
+            fig_raw.update_yaxes(rangemode='tozero')
+            
+            st.plotly_chart(fig_raw, use_container_width=True)
+        else:
+            # 기존 방식 (fallback)
+            fig_raw = Visualizer.plot_raw_data(df, conc_unit, time_label, 
+                                              use_lines=True,
+                                              enzyme_name=enzyme_name, 
+                                              substrate_name=substrate_name)
+            # 원본 시간 범위로 xaxis 설정
+            original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
+            if time_unit == 'min':
+                fig_raw.update_xaxes(range=[0, original_time_max])
+            else:
+                fig_raw.update_xaxes(range=[0, original_time_max])
+            st.plotly_chart(fig_raw, use_container_width=True)
         
         st.subheader("Raw data table")
         st.dataframe(df, height=400, use_container_width=True)
@@ -292,13 +431,17 @@ def general_analysis_mode(st):
             """)
         st.markdown(f"현재 반복 횟수: **{int(st.session_state.get('max_iterations', 2))}**")
 
-        st.plotly_chart(
-            Visualizer.plot_normalized_data(df, conc_unit, time_label, 
-                                           use_lines=(st.session_state.get('data_source_type') == 'Fitted Curves (from Prep mode)'),
-                                           enzyme_name=enzyme_name,
-                                           substrate_name=substrate_name), 
-            use_container_width=True
-        )
+        fig_norm = Visualizer.plot_normalized_data(df, conc_unit, time_label, 
+                                                   use_lines=True,
+                                                   enzyme_name=enzyme_name,
+                                                   substrate_name=substrate_name)
+        # 원본 시간 범위로 xaxis 설정
+        original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
+        if time_unit == 'min':
+            fig_norm.update_xaxes(range=[0, original_time_max])
+        else:
+            fig_norm.update_xaxes(range=[0, original_time_max])
+        st.plotly_chart(fig_norm, use_container_width=True)
         
         # Summary statistics
         st.subheader("정규화 요약 (지수 피팅 기반)")
@@ -499,12 +642,16 @@ def general_analysis_mode(st):
             
             # Plot all model fits
             st.subheader("📈 전체 모델 피팅 결과")
-            st.plotly_chart(
-                Visualizer.plot_model_fits(df, results, conc_unit, time_label,
-                                          enzyme_name=enzyme_name,
-                                          substrate_name=substrate_name), 
-                use_container_width=True
-            )
+            fig_models = Visualizer.plot_model_fits(df, results, conc_unit, time_label,
+                                                    enzyme_name=enzyme_name,
+                                                    substrate_name=substrate_name)
+            # 원본 시간 범위로 xaxis 설정
+            original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
+            if time_unit == 'min':
+                fig_models.update_xaxes(range=[0, original_time_max])
+            else:
+                fig_models.update_xaxes(range=[0, original_time_max])
+            st.plotly_chart(fig_models, use_container_width=True)
             
             # Individual model plots
             st.subheader("📊 개별 모델 비교")
@@ -523,10 +670,14 @@ def general_analysis_mode(st):
                         color = model_colors[idx % len(model_colors)]
                         
                         # Display individual model plot
-                        st.plotly_chart(
-                            Visualizer.plot_individual_model(df, result, conc_unit, time_label, color),
-                            use_container_width=True
-                        )
+                        fig_ind = Visualizer.plot_individual_model(df, result, conc_unit, time_label, color)
+                        # 원본 시간 범위로 xaxis 설정
+                        original_time_max = st.session_state.get('original_time_max', df['time_s'].max())
+                        if time_unit == 'min':
+                            fig_ind.update_xaxes(range=[0, original_time_max])
+                        else:
+                            fig_ind.update_xaxes(range=[0, original_time_max])
+                        st.plotly_chart(fig_ind, use_container_width=True)
                         
                         # Display parameters
                         st.markdown(f"**{result.name} 파라미터**")

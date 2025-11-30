@@ -15,25 +15,42 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-def read_raw_data(filename='prep_data/raw/prep_raw.csv'):
+def read_raw_data(filename='mode_prep_raw_data/raw.csv'):
     """
-    prep_raw.csv에서 원본 데이터 읽기 및 정리
+    raw.csv/xlsx에서 원본 데이터 읽기 및 정리
     
     - 첫 번째 행: 농도 값들 (각 농도가 mean, SD, N으로 3번 반복)
     - 두 번째 행: 컬럼 헤더 (time_min, mean, SD, N, mean, SD, N, ...)
     - 세 번째 행부터: 실제 데이터
     """
-    # 탭 구분자 사용
-    # 첫 번째 행만 읽어서 농도 값 추출
-    first_row_df = pd.read_csv(filename, header=None, nrows=1, sep='\t')
-    concentration_row = first_row_df.iloc[0].values[1:]  # 첫 번째 컬럼(빈 값) 제외
+    # 파일 확장자 확인
+    file_extension = filename.split('.')[-1].lower()
     
-    # 두 번째 행을 헤더로 읽기
-    header_row_df = pd.read_csv(filename, header=None, skiprows=[0], nrows=1, sep='\t')
-    header_names = header_row_df.iloc[0].values
-    
-    # 세 번째 행부터 데이터로 읽기 (헤더 없이)
-    df = pd.read_csv(filename, header=None, skiprows=[0, 1], sep='\t')
+    # CSV 또는 XLSX 파일 읽기
+    if file_extension == 'xlsx':
+        # XLSX 파일 읽기
+        # 첫 번째 행만 읽어서 농도 값 추출
+        first_row_df = pd.read_excel(filename, header=None, nrows=1, engine='openpyxl')
+        concentration_row = first_row_df.iloc[0].values[1:]  # 첫 번째 컬럼(빈 값) 제외
+        
+        # 두 번째 행을 헤더로 읽기
+        header_row_df = pd.read_excel(filename, header=None, skiprows=[0], nrows=1, engine='openpyxl')
+        header_names = header_row_df.iloc[0].values
+        
+        # 세 번째 행부터 데이터로 읽기 (헤더 없이)
+        df = pd.read_excel(filename, header=None, skiprows=[0, 1], engine='openpyxl')
+    else:
+        # CSV 파일 읽기 (탭 구분자 사용)
+        # 첫 번째 행만 읽어서 농도 값 추출
+        first_row_df = pd.read_csv(filename, header=None, nrows=1, sep='\t')
+        concentration_row = first_row_df.iloc[0].values[1:]  # 첫 번째 컬럼(빈 값) 제외
+        
+        # 두 번째 행을 헤더로 읽기
+        header_row_df = pd.read_csv(filename, header=None, skiprows=[0], nrows=1, sep='\t')
+        header_names = header_row_df.iloc[0].values
+        
+        # 세 번째 행부터 데이터로 읽기 (헤더 없이)
+        df = pd.read_csv(filename, header=None, skiprows=[0, 1], sep='\t')
     
     # 헤더 이름 설정
     df.columns = header_names
@@ -115,20 +132,36 @@ def exponential_association(t, F0, Fmax, k):
 
 def michaelis_menten_kinetic(t, Vmax, Km, F0):
     """
-    Michaelis-Menten Kinetic 모델 (시간 도메인)
-    v = Vmax * S / (Km + S)
-    적분형: F(t) = F0 + Vmax * t * S / (Km + S)
+    Michaelis-Menten Kinetic 모델 (시간 도메인) - Prism 방식
+    GraphPad Prism에서 사용하는 방식:
+    F(t) = F0 + (Vmax * t) / (Km + t)
     
-    단순화: F(t) = F0 + (Vmax * t) / (1 + Km/t)
+    또는 더 정확한 형태:
+    F(t) = F0 + Vmax * t / (1 + Km / t)  (t > 0일 때)
     """
-    # 근사: F(t) = F0 + Vmax * t / (1 + Km_eff / t)
-    # Km_eff는 Km을 시간 단위로 변환
-    if Km > 0:
-        # 더 간단한 근사 사용
-        rate = Vmax / (1 + Km / t) if t > 0 else 0
-        return F0 + rate * t
-    else:
-        return F0 + Vmax * t
+    t = np.array(t)
+    # Prism 방식: F(t) = F0 + Vmax * t / (Km + t)
+    # t=0일 때 F0가 되도록
+    result = np.zeros_like(t, dtype=float)
+    mask = t > 0
+    result[mask] = F0 + (Vmax * t[mask]) / (Km + t[mask])
+    result[~mask] = F0
+    return result
+
+
+def michaelis_menten_time_course(t, Vmax, Km, F0):
+    """
+    Prism 스타일 Michaelis-Menten 시간 경과 모델
+    F(t) = F0 + (Vmax * t) / (Km + t)
+    
+    이 모델은 Prism의 "Michaelis-Menten" 방정식과 동일합니다.
+    """
+    t = np.array(t)
+    result = np.zeros_like(t, dtype=float)
+    mask = t > 0
+    result[mask] = F0 + (Vmax * t[mask]) / (Km + t[mask])
+    result[~mask] = F0
+    return result
 
 
 def fit_time_course(times, values, model='exponential'):
@@ -154,30 +187,81 @@ def fit_time_course(times, values, model='exponential'):
     k_init = 0.1  # 초기 추정
     
     if model == 'exponential':
-        # Exponential Association 모델
+        # Prism 방식: Michaelis-Menten 모델을 직접 fitting
+        # GraphPad Prism: Y = Vmax*X/(Km + X)
+        # 시간-형광값 데이터에 적용: F(t) = F0 + (Vmax * t) / (Km + t)
         try:
-            # 매우 넓은 bounds 사용
+            # 초기값 추정 (Prism과 유사한 방식)
+            # Prism은 t→∞일 때 F(t) → F0 + Vmax이므로
+            # Vmax ≈ 최종값 - F0
+            Vmax_init = Fmax_init - F0_init
+            
+            # 더 정확한 Vmax 추정: 여러 포인트를 사용
+            if len(times) > 2:
+                # 중간~후반부 데이터로부터 Vmax 추정
+                # t가 충분히 클 때: F(t) ≈ F0 + Vmax
+                late_values = values[times > times[-1] * 0.5] if len(times) > 3 else values[-3:]
+                if len(late_values) > 0:
+                    avg_late = np.mean(late_values)
+                    Vmax_init = max(Vmax_init, avg_late - F0_init)
+            
+            # Km 초기값: Prism 결과를 보면 보통 작은 값 (0.1~0.3 정도)
+            # 초기 기울기로부터 추정
+            if len(times) > 1 and times[1] > times[0]:
+                early_slope = (values[1] - values[0]) / (times[1] - times[0])
+                if early_slope > 0 and Vmax_init > 0:
+                    # 초기 기울기 = Vmax / Km (t→0일 때)
+                    # 따라서 Km = Vmax / early_slope
+                    Km_init = Vmax_init / early_slope
+                    # Prism 결과 범위로 제한 (0.01 ~ 1.0)
+                    Km_init = max(0.01, min(1.0, Km_init))
+                else:
+                    Km_init = 0.1
+            else:
+                Km_init = 0.1
+            
+            # Prism 방식: Michaelis-Menten 직접 fitting
+            # Prism은 Km > 0 제약을 사용
+            # bounds가 있으면 'trf' 방법 사용 (Trust Region Reflective)
             popt, pcov = curve_fit(
-                exponential_association, times, values,
-                p0=[F0_init, Fmax_init, k_init],
-                bounds=([-1000, F0_init, 0.001], [Fmax_init, Fmax_init * 3, 10]),
-                maxfev=5000
+                michaelis_menten_time_course, times, values,
+                p0=[Vmax_init, Km_init, F0_init],
+                bounds=([0, 0.01, -1000], [np.inf, np.inf, Fmax_init * 2]),
+                maxfev=10000,  # Prism과 유사한 정확도
+                method='trf'  # Trust Region Reflective (bounds 지원)
             )
-            F0, Fmax, k = popt
+            Vmax, Km, F0 = popt
             
-            # Vmax와 Km으로 변환
-            # Vmax는 초기 속도, Km은 반속도 관련
-            Vmax = k * (Fmax - F0)  # 초기 속도
-            Km = (Fmax - F0) / 2  # 반속도 지점 근사
+            # Exponential Association 파라미터로 변환 (호환성 유지)
+            # Fmax는 t→∞일 때의 값: Fmax = F0 + Vmax
+            Fmax = F0 + Vmax
+            # k는 초기 속도로부터 추정
+            # 초기 기울기 = Vmax / Km (t→0일 때)
+            # Exponential Association 초기 기울기 = k * (Fmax - F0)
+            # 따라서 k = (Vmax / Km) / (Fmax - F0) = Vmax / (Km * Vmax) = 1 / Km
+            k = 1.0 / Km if Km > 0 else 0.1
             
-            fit_values = exponential_association(times, F0, Fmax, k)
+            fit_values = michaelis_menten_time_course(times, Vmax, Km, F0)
             
         except Exception as e:
-            print(f"   ⚠️ 피팅 실패: {e}, 기본값 사용")
-            F0, Fmax, k = F0_init, Fmax_init, k_init
-            Vmax = k * (Fmax - F0)
-            Km = (Fmax - F0) / 2
-            fit_values = values
+            print(f"   ⚠️ Prism MM 피팅 실패, Exponential Association으로 대체: {e}")
+            # 실패 시 Exponential Association으로 fallback
+            try:
+                popt, pcov = curve_fit(
+                    exponential_association, times, values,
+                    p0=[F0_init, Fmax_init, k_init],
+                    bounds=([-1000, F0_init, 0.001], [Fmax_init, Fmax_init * 3, 10]),
+                    maxfev=5000
+                )
+                F0, Fmax, k = popt
+                Vmax = k * (Fmax - F0)
+                Km = (Fmax - F0) / 2
+                fit_values = exponential_association(times, F0, Fmax, k)
+            except:
+                F0, Fmax, k = F0_init, Fmax_init, k_init
+                Vmax = k * (Fmax - F0)
+                Km = (Fmax - F0) / 2
+                fit_values = values
     
     else:  # mm_kinetic
         try:
@@ -302,7 +386,7 @@ def main():
     # 1. Raw data 읽기
     print("\n1️⃣ Raw data 파일 읽는 중...")
     try:
-        raw_data = read_raw_data('prep_data/raw/prep_raw.csv')
+        raw_data = read_raw_data('mode_prep_raw_data/raw.csv')
         print(f"   ✅ {len(raw_data)}개 농도 조건 발견")
         for conc_name, data in raw_data.items():
             print(f"      - {conc_name}: {len(data['time'])}개 데이터 포인트")
